@@ -8,13 +8,14 @@ from keras.utils import to_categorical
 
 class DataParser():
     
-    def __init__(self, embed_dim=50):
+    def __init__(self, embed_dim, max_seq_len):
         self.icnale_path = '../data/ICNALE'
         self.glove_path = '../data/glove.6B.50d.txt'
         self.embed_path = '../data/embed_matrix.pkl'
         self.seq_path = '../data/sequences.pkl'
         self.labels_path = '../data/labels.pkl'
         self.embed_dim = embed_dim
+        self.max_seq_len = max_seq_len
         
     def load_data(self):
         try:
@@ -69,16 +70,12 @@ class DataParser():
         
         return raw_sequences, raw_labels, word_index, labels_index
         
-    def prepare_data(self, raw_sequences, raw_labels, labels_index, coverage=0.8):
+    def prepare_data(self, raw_sequences, raw_labels, labels_index):
         """
         Tasks: sequence padding, categorical labels
         """
-        maxlen = self._calculate_maxlen(raw_sequences, coverage)
-        
-        sequences = pad_sequences(raw_sequences, maxlen=maxlen, padding='post')
+        sequences = pad_sequences(raw_sequences, maxlen=self.max_seq_len, padding='post')
         labels = to_categorical([labels_index[l] for l in raw_labels])
-        
-        sequences, labels = self.shuffle_data(sequences, labels)
         
         with open(self.seq_path, 'w+') as fd:
             pkl.dump(sequences, fd)
@@ -96,6 +93,16 @@ class DataParser():
         sequences = sequences[indices]
         labels = labels[indices]        
         return sequences, labels
+    
+    def split_data(self, sequences, labels, split=0.8):
+        num_validation_samples = int(split * sequences.shape[0])
+
+        x_train = sequences[:-num_validation_samples]
+        y_train = labels[:-num_validation_samples]
+        x_val = sequences[-num_validation_samples:]
+        y_val = labels[-num_validation_samples:]       
+        
+        return x_train, y_train, x_val, y_val
     
     def prepare_embedding(self, word_index):
         embeddings_index = {}
@@ -118,11 +125,6 @@ class DataParser():
         print('Found %s word vectors.' % len(embeddings_index))        
         
         return embedding_matrix
-    
-    def _calculate_maxlen(self, sequences, coverage):
-        lengths = sorted([len(seq) for seq in sequences])
-        coverage_length = lengths[int(len(lengths) * coverage)]
-        return coverage_length
     
     def _sample_generator(self):
         for path in sorted(os.listdir(self.icnale_path)):
