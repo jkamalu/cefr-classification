@@ -6,6 +6,10 @@ from keras.preprocessing.text import text_to_word_sequence
 from keras.preprocessing.sequence import pad_sequences
 from keras.utils import to_categorical
 
+from syntaxnet import load_parser_ops  # This loads the actual op definitions
+from syntaxnet import sentence_pb2
+from syntaxnet.ops import gen_parser_ops
+
 class DataParser():
     
     def __init__(self, embed_dim, max_seq_len):
@@ -14,6 +18,7 @@ class DataParser():
         self.embed_path = '../data/embed_matrix.pkl'
         self.seq_path = '../data/sequences.pkl'
         self.labels_path = '../data/labels.pkl'
+        self.parsey_path = '../data/parsey.pkl'
         self.embed_dim = embed_dim
         self.max_seq_len = max_seq_len
         
@@ -30,7 +35,7 @@ class DataParser():
         return sequences, labels, embed_matrix
         
     def parse_data(self):
-        raw_sequences, raw_labels, word_index, label_index = self.build_data()
+        raw_sequences, raw_labels, word_index, label_index, parsey_sequences = self.build_data()
         sequences, labels = self.prepare_data(raw_sequences, raw_labels, label_index)
         embed_matrix = self.prepare_embedding(word_index)
         return sequences, labels, embed_matrix
@@ -58,7 +63,7 @@ class DataParser():
             raw_labels.append(label)
             
             # Build word index and sequences
-            sequence = []    
+            sequence = []
             tokens = self._to_tokens(text)
             for word in tokens:
                 if word not in word_index:
@@ -125,6 +130,133 @@ class DataParser():
         print('Found %s word vectors.' % len(embeddings_index))        
         
         return embedding_matrix
+
+
+    """ Parsey McParseface methods start here
+        These will consist of building the data into paragraphs
+        These paragraphs become sentences and they are processed by parsey
+        These sentences get padded into sequences
+        We join these sequences back into a list representing the whole paragraph
+        Save the entirey of it all into parsey.dump
+    """
+    segmenter_model = self.load_model("../data/PARSEY_EN/segmenter", "spec.textproto", "checkpoint")
+    parser_model = self.load_model("../data/PARSEY_EN", "parser_spec.textproto", "checkpoint")
+
+    def load_model(self, base_dir, master_spec_name, checkpoint_name):
+        # Read the master spec
+        master_spec = spec_pb2.MasterSpec()
+        with open(os.path.join(base_dir, master_spec_name), "r") as f:
+            text_format.Merge(f.read(), master_spec)
+        spec_builder.complete_master_spec(master_spec, None, base_dir)
+        logging.set_verbosity(logging.WARN)  # Turn off TensorFlow spam.
+
+        # Initialize a graph
+        graph = tf.Graph()
+        with graph.as_default():
+            hyperparam_config = spec_pb2.GridPoint()
+            builder = graph_builder.MasterBuilder(master_spec, hyperparam_config)
+            # This is the component that will annotate test sentences.
+            annotator = builder.add_annotation(enable_tracing=True)
+            builder.add_saver()  # "Savers" can save and load models; here, we're only going to load.
+
+        sess = tf.Session(graph=graph)
+        with graph.as_default():
+            #sess.run(tf.global_variables_initializer())
+            #sess.run('save/restore_all', {'save/Const:0': os.path.join(base_dir, checkpoint_name)})
+            builder.saver.restore(sess, os.path.join(base_dir, checkpoint_name))
+
+        def annotate_sentence(sentence):
+            with graph.as_default():
+                return sess.run([annotator['annotations'], annotator['traces']],
+                                feed_dict={annotator['input_batch']: [sentence]})
+        return annotate_sentence
+
+    def annotate_text(self,text):
+        sentence = sentence_pb2.Sentence(
+            text=text,
+            token=[sentence_pb2.Token(word=text, start=-1, end=-1)]
+        )
+
+        # preprocess
+        with tf.Session(graph=tf.Graph()) as tmp_session:
+            char_input = gen_parser_ops.char_token_generator([sentence.SerializeToString()])
+            preprocessed = tmp_session.run(char_input)[0]
+        segmented, _ = segmenter_model(preprocessed)
+
+        annotations, traces = parser_model(segmented[0])
+    #     assert len(annotations) == 1
+    #     assert len(traces) == 1
+        return sentence_pb2.Sentence.FromString(annotations[0]), traces[0]
+
+    def create_sentence_parse(sentences):  # put stuff in a function to not pollute global scope
+        counter = 0
+        seq = []
+        tokens = []
+        for sent in sentences:
+            parse_tree, trace = annotate_text(sent)
+            for token in parse_tree.token:
+                if counter > Config.max_seq_len: break
+                counter += 1
+                tokens.append( str(token.__getattribute__("word")) )
+                seq.append(str(token))
+        return (seq, tokens)
+
+    def build_parsey_data():
+        dp = DataParser(Config.embed_dim, Config.max_seq_len)
+        sampler = dp._sample_generator()
+
+#             sentences_used = []
+        parsey_sequences = []     #each one of the elements here is a paragraph
+
+        raw_sequences = []
+        raw_labels = []
+        word_index = {}
+        labels_index = {}
+
+
+        while True:
+            if len(parsey_sequences) > 0: break
+            try:
+                sample = sampler.next()
+            except:
+                break
+            text, label = sample
+    #         counter = 0
+    #         print text
+            sentences = dp._to_sentences(text)
+            seq, tokens = create_sentence_parse(sentences)     #returns a sequence of this stuff
+            sentences_used.append(tokens)
+    #         seq = pad_sequences(seq, maxlen=Config.max_seq_len, padding='$NO-CASE$')
+            parsey_sequences.append(seq)
+
+            # Build labels index
+            if label[:2] == 'XX':
+                label = 'Native'
+            if label not in labels_index:
+                labels_index[label] = len(labels_index)     
+            raw_labels.append(label)
+
+            # Build word index and sequences
+            sequence = []
+#                 tokens = self._to_tokens(text)
+            for word in tokens:
+                if word not in word_index:
+                    word_index[word] = len(word_index) + 1
+                sequence.append(word_index[word])
+            raw_sequences.append(sequence)
+
+        print('Parsed {} samples'.format(len(raw_sequences)))
+
+        return raw_sequences, raw_labels, word_index, labels_index, parsey_sequences
+
+#             return (parsey_sequences)
+
+    
+    """ Parsey McParseface methods end here
+        This space left intentionally blank for code clarity
+
+    """
+
     
     def _sample_generator(self):
         for path in sorted(os.listdir(self.icnale_path)):
