@@ -7,6 +7,7 @@ from keras.preprocessing.sequence import pad_sequences
 from keras.utils import to_categorical
 from sklearn.feature_extraction.text import CountVectorizer
 import spacy
+from random import shuffle
 
 class DataParser():
     
@@ -28,15 +29,16 @@ class DataParser():
         }    
         
     def parse_data(self):
-        raw_seq, raw_lex, raw_labels, word_index = self.build_data()
-        x_seq, x_syn = self.prepare_data(raw_sequences, raw_labels)
+        raw_seq, raw_syn, raw_lex, raw_labels, word_index = self.build_data()
+        x_seq, x_syn, x_lex, labels = self.prepare_data(raw_seq, raw_syn, raw_lex, raw_labels)
         embed_matrix = self.prepare_embedding(word_index)        
-        return sequences, labels, para_features, embed_matrix
+        return  x_seq, x_syn, x_lex, labels, embed_matrix
     
     def build_data(self):
-        sampler = self._sample_generator()
+        sampler = self.data_gen()
 
         texts = []
+        raw_labels = []
 
         tok_index = {}
         pos_index = {}
@@ -60,13 +62,13 @@ class DataParser():
             # Build word index and sequences
             tok_idx_seq = []
             pos_idx_seq = []
-            parse = self.spacy_parser.(text)
+            parse = self.spacy_parser(text)
             for token in parse:
-                if token.word not in tok_index:
-                    tok_index[token.word] = len(tok_index) + 1
+                if token.text not in tok_index:
+                    tok_index[token.text] = len(tok_index) + 1
                 if token.pos_ not in pos_index:
                     pos_index[token.pos_] = len(pos_index) + 1
-                tok_idx_seq.append(tok_index[token.word])
+                tok_idx_seq.append(tok_index[token.text])
                 pos_idx_seq.append(pos_index[token.pos_])                
 
             tok_seqs.append(tok_idx_seq)
@@ -78,17 +80,18 @@ class DataParser():
         raw_syn = pos_seqs
         raw_lex = n_grams
 
-        print('Parsed {} samples'.format(len(raw_sequences)))
+        print('Parsed {} samples'.format(len(raw_seq)))
         
-        return raw_seq, raw_syn, raw_lex, raw_labels, word_index
+        return raw_seq, raw_syn, raw_lex, raw_labels, tok_index
     
     # sequence padding, categorical labels
-    def prepare_data(self, raw_sequences, raw_labels):
-        sequences = pad_sequences(raw_sequences, maxlen=self.max_seq_len, padding='post')
+    def prepare_data(self, raw_seq, raw_syn, raw_lex, raw_labels):
+        raw_seq = pad_sequences(raw_seq, maxlen=self.max_seq_len, padding='post')
+        raw_syn = pad_sequences(raw_syn, maxlen=self.max_seq_len, padding='post')
         labels = to_categorical([self.labels_index[l] for l in raw_labels])
-        print('Shape of data: {}'.format(sequences.shape))
+        print('Shape of data: {}'.format(raw_seq.shape))
         print('Shape of labels: {}'.format(labels.shape))        
-        return sequences, labels
+        return raw_seq, raw_syn, raw_lex, labels
     
     def shuffle_data(self, X, Y):
         indices = np.arange(X.shape[0])
@@ -145,16 +148,13 @@ class DataParser():
         samples = []
         levels = []
         for l in level_to_sample:
-            print l
             samples.extend(level_to_sample[l][:400])
             levels.extend([l for i in range(400)])
-        samples = np.array(samples)
-        levels = np.array(levels)
 
-        samples, levels = self.shuffle_data(samples, levels)
-        print samples.shape, levels.shape
+        shuffle(samples)
+        shuffle(levels)
 
-        for i in range(samples.shape[0]):
+        for i in range(len(samples)):
             yield samples[i], levels[i]
     
     def _n_grams(self, texts, low, high):
