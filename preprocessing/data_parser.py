@@ -1,14 +1,27 @@
 import os
 import re
 import numpy as np
+import sys
+import traceback
 import pickle as pkl
 from keras.preprocessing.text import text_to_word_sequence
 from keras.preprocessing.sequence import pad_sequences
 from keras.utils import to_categorical
 
+import ipywidgets as widgets
+import tensorflow as tf
+from IPython import display
+from dragnn.protos import spec_pb2
+from dragnn.python import graph_builder
+from dragnn.python import spec_builder
+from dragnn.python import load_dragnn_cc_impl  # This loads the actual op definitions
+from dragnn.python import render_parse_tree_graphviz
+from dragnn.python import visualization
+from google.protobuf import text_format
 from syntaxnet import load_parser_ops  # This loads the actual op definitions
 from syntaxnet import sentence_pb2
 from syntaxnet.ops import gen_parser_ops
+from tensorflow.python.platform import tf_logging as logging
 
 class DataParser():
     
@@ -21,6 +34,9 @@ class DataParser():
         self.parsey_path = '../data/parsey.pkl'
         self.embed_dim = embed_dim
         self.max_seq_len = max_seq_len
+
+        self.segmenter_model = self.load_model("../data/PARSEY_EN/segmenter", "spec.textproto", "checkpoint")
+        self.parser_model = self.load_model("../data/PARSEY_EN", "parser_spec.textproto", "checkpoint")
         
     def load_data(self):
         try:
@@ -35,10 +51,46 @@ class DataParser():
         return sequences, labels, embed_matrix
         
     def parse_data(self):
-        raw_sequences, raw_labels, word_index, label_index, parsey_sequences = self.build_data()
-        sequences, labels = self.prepare_data(raw_sequences, raw_labels, label_index)
+        raw_sequences, raw_labels, word_index, label_index, raw_parsey_sequences = self.build_parsey_data()
+        self.validate_sequence_len(raw_sequences, raw_labels, raw_parsey_sequences)
+        sequences, labels, parsey_sequences = self.prepare_data(raw_sequences, raw_labels, label_index, raw_parsey_sequences)
         embed_matrix = self.prepare_embedding(word_index)
         return sequences, labels, embed_matrix
+
+    def validate_sequence_len(self, raw_sequences, raw_labels, raw_parsey):
+        try:
+            assert len(raw_sequences) == len(raw_parsey)
+            assert len(raw_sequences) == len(raw_labels)
+        except AssertionError:
+            _, _, tb = sys.exc_info()
+            traceback.print_tb(tb) # Fixed format
+            tb_info = traceback.extract_tb(tb)
+            filename, line, func, text = tb_info[-1]
+
+            print('An error occurred on line {} in statement {}'.format(line, text))
+            exit(1)
+
+        for i in range(len(raw_parsey)):
+            seq = raw_sequences[i]
+            parsey = raw_parsey[i]
+            try:
+                assert len(seq) == len(parsey)
+            except AssertionError:
+                _, _, tb = sys.exc_info()
+                traceback.print_tb(tb) # Fixed format
+                tb_info = traceback.extract_tb(tb)
+                filename, line, func, text = tb_info[-1]
+
+                print('An error occurred on line {} in statement {}'.format(line, text))
+                print(len(seq))
+                print(len(parsey))
+                print(seq)
+                print(parsey)
+                raise
+                exit(1)
+        print("Parsey and the sequences have congruent shapes")
+        return True
+
     
     def build_data(self):
         sampler = self._sample_generator()
@@ -75,12 +127,18 @@ class DataParser():
         
         return raw_sequences, raw_labels, word_index, labels_index
         
-    def prepare_data(self, raw_sequences, raw_labels, labels_index):
+    def prepare_data(self, raw_sequences, raw_labels, labels_index, raw_parsey):
         """
         Tasks: sequence padding, categorical labels
         """
+
         sequences = pad_sequences(raw_sequences, maxlen=self.max_seq_len, padding='post')
         labels = to_categorical([labels_index[l] for l in raw_labels])
+        parsey_sequences = raw_parsey
+        for i in range(len(parsey_sequences)):
+            sample = parsey_sequences[i]
+            for j in range(self.max_seq_len - len(parsey_sequences)):
+                parsey_sequences.append( ["$NO-CASE$"] )
         
         with open(self.seq_path, 'w+') as fd:
             pkl.dump(sequences, fd)
@@ -89,8 +147,9 @@ class DataParser():
             
         print('Shape of data: {}'.format(sequences.shape))
         print('Shape of labels: {}'.format(labels.shape))        
+        print('Shape of parsey: {}'.format(parsey_sequences.shape))
         
-        return sequences, labels
+        return sequences, labels, parsey_sequences
     
     def shuffle_data(self, sequences, labels):
         indices = np.arange(sequences.shape[0])
@@ -139,8 +198,6 @@ class DataParser():
         We join these sequences back into a list representing the whole paragraph
         Save the entirey of it all into parsey.dump
     """
-    segmenter_model = self.load_model("../data/PARSEY_EN/segmenter", "spec.textproto", "checkpoint")
-    parser_model = self.load_model("../data/PARSEY_EN", "parser_spec.textproto", "checkpoint")
 
     def load_model(self, base_dir, master_spec_name, checkpoint_name):
         # Read the master spec
@@ -181,28 +238,29 @@ class DataParser():
         with tf.Session(graph=tf.Graph()) as tmp_session:
             char_input = gen_parser_ops.char_token_generator([sentence.SerializeToString()])
             preprocessed = tmp_session.run(char_input)[0]
-        segmented, _ = segmenter_model(preprocessed)
+        segmented, _ = self.segmenter_model(preprocessed)
 
-        annotations, traces = parser_model(segmented[0])
+        annotations, traces = self.parser_model(segmented[0])
     #     assert len(annotations) == 1
     #     assert len(traces) == 1
         return sentence_pb2.Sentence.FromString(annotations[0]), traces[0]
 
-    def create_sentence_parse(sentences):  # put stuff in a function to not pollute global scope
+
+    def create_sentence_parse(self, sentences):  # put stuff in a function to not pollute global scope
         counter = 0
         seq = []
         tokens = []
         for sent in sentences:
-            parse_tree, trace = annotate_text(sent)
+            parse_tree, trace = self.annotate_text(sent)
             for token in parse_tree.token:
-                if counter > Config.max_seq_len: break
+                if counter > self.max_seq_len: break
                 counter += 1
                 tokens.append( str(token.__getattribute__("word")) )
                 seq.append(str(token))
         return (seq, tokens)
 
-    def build_parsey_data():
-        dp = DataParser(Config.embed_dim, Config.max_seq_len)
+    def build_parsey_data(self):
+        dp = DataParser(self.embed_dim, self.max_seq_len)
         sampler = dp._sample_generator()
 
 #             sentences_used = []
@@ -224,11 +282,11 @@ class DataParser():
     #         counter = 0
     #         print text
             sentences = dp._to_sentences(text)
-            seq, tokens = create_sentence_parse(sentences)     #returns a sequence of this stuff
-            sentences_used.append(tokens)
+            seq, tokens = self.create_sentence_parse(sentences)     #returns a sequence and the tokens used by parsey
     #         seq = pad_sequences(seq, maxlen=Config.max_seq_len, padding='$NO-CASE$')
             parsey_sequences.append(seq)
 
+            # Non parsey data building
             # Build labels index
             if label[:2] == 'XX':
                 label = 'Native'
