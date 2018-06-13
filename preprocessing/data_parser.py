@@ -129,7 +129,7 @@ class DataParser():
         
     def prepare_data(self, raw_sequences, raw_labels, labels_index, raw_parsey):
         """
-        Tasks: sequence padding, categorical labels
+        Tasks: sequence padding, categorical labels, parsey sequence padding
         """
 
         sequences = pad_sequences(raw_sequences, maxlen=self.max_seq_len, padding='post')
@@ -147,16 +147,17 @@ class DataParser():
             
         print('Shape of data: {}'.format(sequences.shape))
         print('Shape of labels: {}'.format(labels.shape))        
-        print('Shape of parsey: {}'.format(parsey_sequences.shape))
+        print('Shape of parsey: ( {}, {} )'.format(len(parsey_sequences), len(parsey_sequences[0]) ))
         
         return sequences, labels, parsey_sequences
     
-    def shuffle_data(self, sequences, labels):
+    def shuffle_data(self, sequences, labels, parsey_sequences):
         indices = np.arange(sequences.shape[0])
         np.random.shuffle(indices)
         sequences = sequences[indices]
-        labels = labels[indices]        
-        return sequences, labels
+        labels = labels[indices]     
+        parsey_sequences = parsey_sequences[indices]   
+        return sequences, labels, parsey_sequences
     
     def split_data(self, sequences, labels, split=0.8):
         num_validation_samples = int(split * sequences.shape[0])
@@ -306,8 +307,6 @@ class DataParser():
         print('Parsed {} samples'.format(len(raw_sequences)))
 
         return raw_sequences, raw_labels, word_index, labels_index, parsey_sequences
-
-#             return (parsey_sequences)
 
     
     """ Parsey McParseface methods end here
