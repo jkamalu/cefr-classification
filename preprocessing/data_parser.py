@@ -41,7 +41,13 @@ class DataParser():
         raw_sequences = []
         raw_labels = []
         word_index = {}
-        labels_index = {}
+        labels_index = {
+            'A2-0': 0,
+            'B1-1': 1,
+            'B1-2': 2,
+            'B2-0': 3,
+            'Native': 4
+        }
 
         while True:
             try:
@@ -52,9 +58,7 @@ class DataParser():
 
             # Build labels index
             if label[:2] == 'XX':
-                label = 'Native'
-            if label not in labels_index:
-                labels_index[label] = len(labels_index)     
+                label = 'Native' 
             raw_labels.append(label)
             
             # Build word index and sequences
@@ -97,10 +101,10 @@ class DataParser():
     def split_data(self, sequences, labels, split=0.8):
         num_validation_samples = int(split * sequences.shape[0])
 
-        x_train = sequences[:-num_validation_samples]
-        y_train = labels[:-num_validation_samples]
-        x_val = sequences[-num_validation_samples:]
-        y_val = labels[-num_validation_samples:]       
+        x_val = sequences[:-num_validation_samples]
+        y_val = labels[:-num_validation_samples]
+        x_train = sequences[-num_validation_samples:]
+        y_train = labels[-num_validation_samples:]      
         
         return x_train, y_train, x_val, y_val
     
@@ -125,6 +129,33 @@ class DataParser():
         print('Found %s word vectors.' % len(embeddings_index))        
         
         return embedding_matrix
+
+    def balance_labels(self, sequences, labels):
+
+        def cat_to_str(cat_label):
+            return np.where(cat_label==1)[0][0]
+
+        def str_to_cat(str_label):
+            arr = np.zeros(labels.shape[1])
+            arr[str_label] = 1
+            return arr
+
+        data_by_label = {}
+        for i in range(len(sequences)):
+            l = cat_to_str(labels[i])
+            if l not in data_by_label:
+                data_by_label[l] = [sequences[i]]
+            else:
+                data_by_label[l].append(sequences[i])
+
+        trimmed_sequences = []
+        trimmed_labels = []
+        for label in data_by_label:
+            trimmed_sequences.extend(data_by_label[label][:400])
+            trimmed_labels.extend([str_to_cat(label) for i in range(400)])
+        trimmed_sequences = np.array(trimmed_sequences)
+        trimmed_labels = np.array(trimmed_labels)
+        return trimmed_sequences, trimmed_labels      
     
     def _sample_generator(self):
         for path in sorted(os.listdir(self.icnale_path)):
