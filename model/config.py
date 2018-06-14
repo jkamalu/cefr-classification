@@ -8,4 +8,4 @@ class Config():
     num_classes = 5
     learning_rate = 0.01
     learning_decay = 1e-6
-    epochs = 20
+    epochs = 10

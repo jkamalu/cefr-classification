@@ -15,7 +15,10 @@ class DataParser():
         self.icnale_path = '../data/ICNALE'
         self.glove_path = '../data/glove.6B.50d.txt'
         self.embed_path = '../data/embed_matrix.pkl'
-        self.seq_path = '../data/x_seq.pkl'       
+        self.seq_path = '../data/x_seq.pkl'
+        self.syn_path = '../data/x_syn.pkl'
+        self.lex_path = '../data/x_lex.pkl'
+        
         self.labels_path = '../data/labels.pkl'
         self.embed_dim = embed_dim
         self.max_seq_len = max_seq_len
@@ -28,10 +31,36 @@ class DataParser():
             'Native': 4
         }    
         
+    def load_data(self):
+        with open(self.seq_path) as fd:
+            x_seq = pkl.load(fd)
+        with open(self.syn_path) as fd:
+            x_syn = pkl.load(fd)
+        with open(self.lex_path) as fd:
+            x_lex = pkl.load(fd)            
+        with open(self.labels_path) as fd:
+            labels = pkl.load(fd)
+        with open(self.embed_path) as fd:
+            embed_matrix = pkl.load(fd)
+            
+        return x_seq, x_syn, x_lex, labels, embed_matrix
+        
     def parse_data(self):
         raw_seq, raw_syn, raw_lex, raw_labels, word_index = self.build_data()
         x_seq, x_syn, x_lex, labels = self.prepare_data(raw_seq, raw_syn, raw_lex, raw_labels)
-        embed_matrix = self.prepare_embedding(word_index)        
+        embed_matrix = self.prepare_embedding(word_index)
+        
+        with open(self.seq_path, 'w+') as fd:
+            pkl.dump(x_seq, fd)
+        with open(self.syn_path, 'w+') as fd:
+            pkl.dump(x_syn, fd)
+        with open(self.lex_path, 'w+') as fd:
+            pkl.dump(x_lex, fd)
+        with open(self.labels_path, 'w+') as fd:
+            pkl.dump(labels, fd)            
+        with open(self.embed_path, 'w+') as fd:
+            pkl.dump(embed_matrix, fd) 
+            
         return  x_seq, x_syn, x_lex, labels, embed_matrix
     
     def build_data(self):
